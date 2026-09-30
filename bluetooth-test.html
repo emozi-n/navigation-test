@@ -6,7 +6,7 @@
   <meta name="viewport"
         content="width=device-width, initial-scale=1.0">
 
-  <title>Bluetooth振動テスト</title>
+  <title>Wi‑Fi振動テスト</title>
 
   <style>
     body {
@@ -55,8 +55,8 @@
 
   <h1>📳 振動デバイステスト</h1>
 
-  <button onclick="connectBluetooth()">
-    Bluetooth接続
+  <button onclick="connectWifi()">
+    Wi‑Fi接続
   </button>
 
   <button onclick="sendVibrate()">
@@ -64,7 +64,7 @@
   </button>
 
   <div id="status">
-    まず「Bluetooth接続」を押してください
+    まず「Wi‑Fi接続」を押してください
   </div>
 
 </div>
@@ -73,86 +73,55 @@
 <script>
 
   // ========================================
-  // AtomS3-LiteのBluetooth設定
+  // Wi‑Fi/WebSocket設定
   // ========================================
 
-  const SERVICE_UUID =
-    "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+  const DEFAULT_WIFI_URL = "ws://192.168.0.10:8080";
 
-  const CHARACTERISTIC_UUID =
-    "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-
-
-  // Bluetoothデバイス
-  let bluetoothDevice = null;
-
-  // データを書き込むCharacteristic
-  let rxCharacteristic = null;
+  let socket = null;
 
 
   // ========================================
-  // Bluetooth接続
+  // Wi‑Fi接続
   // ========================================
 
-  async function connectBluetooth() {
+  function connectWifi() {
 
-    const status =
-      document.getElementById("status");
+    const status = document.getElementById("status");
+    const url = prompt("親機の WebSocket URL を入力してください", DEFAULT_WIFI_URL);
+
+    if (!url) return;
+
+    const trimmedUrl = url.trim();
+
+    if (!/^wss?:\/\//i.test(trimmedUrl)) {
+      status.textContent = "接続先は ws:// または wss:// で始める必要があります";
+      return;
+    }
 
     try {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
 
-      status.textContent =
-        "Bluetoothデバイスを探しています…";
+      socket = new WebSocket(trimmedUrl);
+      status.textContent = "Wi‑Fi接続を開始しています…";
 
+      socket.onopen = () => {
+        status.textContent = "✅ Wi‑Fi接続成功！";
+      };
 
-      // Bluetoothデバイスを探す
-      bluetoothDevice =
-        await navigator.bluetooth.requestDevice({
+      socket.onerror = () => {
+        status.textContent = "Wi‑Fi接続に失敗しました。URL を確認してください";
+      };
 
-          filters: [
-            {
-              services: [SERVICE_UUID]
-            }
-          ]
-
-        });
-
-
-      status.textContent =
-        "AtomS3-Liteに接続しています…";
-
-
-      // GATTサーバーに接続
-      const server =
-        await bluetoothDevice.gatt.connect();
-
-
-      // サービスを取得
-      const service =
-        await server.getPrimaryService(
-          SERVICE_UUID
-        );
-
-
-      // Characteristicを取得
-      rxCharacteristic =
-        await service.getCharacteristic(
-          CHARACTERISTIC_UUID
-        );
-
-
-      status.textContent =
-        "✅ Bluetooth接続成功！";
-
+      socket.onclose = () => {
+        status.textContent = "Wi‑Fi接続を切断しました";
+      };
 
     } catch (error) {
-
       console.log(error);
-
-      status.textContent =
-        "Bluetooth接続に失敗しました。\n" +
-        error.message;
-
+      status.textContent = "Wi‑Fi接続に失敗しました。\n" + error.message;
     }
 
   }
@@ -162,48 +131,28 @@
   // 振動命令を送る
   // ========================================
 
-  async function sendVibrate() {
+  function sendVibrate() {
 
-    const status =
-      document.getElementById("status");
+    const status = document.getElementById("status");
 
-
-    // 接続されているか確認
-    if (!rxCharacteristic) {
-
-      status.textContent =
-        "先に「Bluetooth接続」を押してください";
-
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      status.textContent = "先に「Wi‑Fi接続」を押してください";
       return;
-
     }
 
-
     try {
+      const payload = JSON.stringify({
+        type: "VIBRATE",
+        intensity: 255,
+        message: "vibration test"
+      });
 
-      // Atomに送る命令
-      const command =
-        new TextEncoder().encode("VIBRATE");
-
-
-      // Bluetoothで送信
-      await rxCharacteristic.writeValue(
-        command
-      );
-
-
-      status.textContent =
-        "📳 振動命令を送信しました！";
-
+      socket.send(payload);
+      status.textContent = "📳 振動命令を送信しました！";
 
     } catch (error) {
-
       console.log(error);
-
-      status.textContent =
-        "振動命令の送信に失敗しました。\n" +
-        error.message;
-
+      status.textContent = "振動命令の送信に失敗しました。\n" + error.message;
     }
 
   }
