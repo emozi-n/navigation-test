@@ -305,20 +305,28 @@ const MAX_HEADING_STEP = 30;
       return;
     }
 
+
     const diff = angleDiff(selfHeadingDeg, bearing); // -180..180
-    let delta = diff - displayedDiff;
     
-    if(delta > 180){
-      delta -= 360;
-    }
-    if(delta < -180){
-      delta += 360;
+    if(displayedDiff === null){
+      displayedDiff = diff;
+    }else{
+      let delta = diff - (displayedDiff % 360);
+
+      if(delta > 180){
+        delta -= 360;
+      }
+
+      if(delta < -180){
+        delta += 360;
+      }
+
+      displayedDiff += delta;
     }
 
-displayedDiff += delta;
-
-diffDegEl.textContent = (diff>0?'+':'')+diff.toFixed(0)+'°';
-needleWrap.style.transform = `rotate(${displayedDiff}deg)`;
+    diffDegEl.textContent = (diff>0?'+':'')+diff.toFixed(0)+'°';
+    needleWrap.style.transform = `rotate(${displayedDiff}deg)`;
+    
     const threshold = Number(thresholdSlider.value);
     const aligned = Math.abs(diff) <= threshold;
     pullGlow.classList.toggle('active', aligned);
