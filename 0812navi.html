@@ -210,6 +210,7 @@
   let bleDevice=null, bleChar=null;
   let bleServer = null;
   let lastVibeTime=0;
+  let displayedDiff = null;
 
 // 方角を安定させるための履歴
 let headingHistory = [];
@@ -304,10 +305,20 @@ const MAX_HEADING_STEP = 30;
       return;
     }
 
-    const diff = angleDiff(selfHeadingDeg, bearing); // -180..180、+なら右(時計回り)に回すべき
-    diffDegEl.textContent = (diff>0?'+':'')+diff.toFixed(0)+'°';
-    needleWrap.style.transform = `rotate(${diff}deg)`;
+    const diff = angleDiff(selfHeadingDeg, bearing); // -180..180
+    let delta = diff - displayedDiff;
+    
+    if(delta > 180){
+      delta -= 360;
+    }
+    if(delta < -180){
+      delta += 360;
+    }
 
+displayedDiff += delta;
+
+diffDegEl.textContent = (diff>0?'+':'')+diff.toFixed(0)+'°';
+needleWrap.style.transform = `rotate(${displayedDiff}deg)`;
     const threshold = Number(thresholdSlider.value);
     const aligned = Math.abs(diff) <= threshold;
     pullGlow.classList.toggle('active', aligned);
