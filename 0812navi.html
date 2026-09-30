@@ -211,6 +211,10 @@
   let bleServer = null;
   let lastVibeTime=0;
 
+// 方角を安定させるための履歴
+let headingHistory = [];
+const HEADING_SAMPLES = 10;
+
   //const BLE_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
   //const BLE_CHAR_UUID    = '0000ffe1-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
 
@@ -353,19 +357,54 @@
     }, { enableHighAccuracy:true, maximumAge:1000, timeout:15000 });
   }
 
-  function onOrientation(e){
-    let heading = null;
-    if(typeof e.webkitCompassHeading === 'number'){
-      heading = e.webkitCompassHeading; // iOS: 0=北, 時計回り, 補正済み
-    } else if(e.alpha != null){
-      // Android等: absolute=trueなら概ね 0=北, 反時計回りのalpha → 時計回りheadingへ変換
-      heading = (360 - e.alpha) % 360;
-    }
-    if(heading==null) return;
-    selfHeadingDeg = heading;
-    selfHeadingEl.textContent = heading.toFixed(0)+'°';
-    update();
+function onOrientation(e){
+  let heading = null;
+
+  if(typeof e.webkitCompassHeading === 'number'){
+    heading = e.webkitCompassHeading; // iOS: 0=北, 時計回り
+  } else if(e.alpha != null){
+    // Android等
+    heading = (360 - e.alpha) % 360;
   }
+
+  if(heading == null || !Number.isFinite(heading)) return;
+
+  // 0°と360°の境目を考慮して平均する
+  const rad = heading * Math.PI / 180;
+
+  headingHistory.push({
+    sin: Math.sin(rad),
+    cos: Math.cos(rad)
+  });
+
+  // 最新10個だけ残す
+  if(headingHistory.length > HEADING_SAMPLES){
+    headingHistory.shift();
+  }
+
+  // 平均した方向を計算
+  let sinSum = 0;
+  let cosSum = 0;
+
+  for(const h of headingHistory){
+    sinSum += h.sin;
+    cosSum += h.cos;
+  }
+
+  let smoothedHeading =
+    Math.atan2(sinSum, cosSum) * 180 / Math.PI;
+
+  if(smoothedHeading < 0){
+    smoothedHeading += 360;
+  }
+
+  selfHeadingDeg = smoothedHeading;
+
+  selfHeadingEl.textContent =
+    smoothedHeading.toFixed(0) + '°';
+
+  update();
+}
 
   // ---- UIイベント ----
   document.getElementById('btnStart').addEventListener('click', startSensors);
