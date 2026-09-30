@@ -215,6 +215,9 @@
 let headingHistory = [];
 const HEADING_SAMPLES = 10;
 
+// 方角が急に飛んだときの最大変化量
+const MAX_HEADING_STEP = 30; 
+
   //const BLE_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
   //const BLE_CHAR_UUID    = '0000ffe1-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
 
@@ -369,7 +372,31 @@ function onOrientation(e){
 
   if(heading == null || !Number.isFinite(heading)) return;
 
+  // --------------------------------
+  // 急激な角度変化をチェック
+  // --------------------------------
+  if(selfHeadingDeg != null){
+
+    // 角度差を -180 ～ +180 にする
+    let step = heading - selfHeadingDeg;
+
+    if(step > 180){
+      step -= 360;
+    }
+
+    if(step < -180){
+      step += 360;
+    }
+
+    // 一度に30°以上飛んだ場合は採用しない
+    if(Math.abs(step) > MAX_HEADING_STEP){
+      return;
+    }
+  }
+
+  // --------------------------------
   // 0°と360°の境目を考慮して平均する
+  // --------------------------------
   const rad = heading * Math.PI / 180;
 
   headingHistory.push({
