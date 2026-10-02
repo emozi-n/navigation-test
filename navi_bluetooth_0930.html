@@ -324,7 +324,7 @@
     // 触覚フィードバック（BLE通知）を実行
     handleHapticFeedback(aligned);
   }
-
+/*
   // ---- 触覚フィードバック (Bluetooth制御) ----
   async function handleHapticFeedback(aligned){
     // BLE非接続時や準備ができていない場合は何もしない
@@ -353,7 +353,44 @@
       }
     }
   }
+*/
+  // ---- BLE通信の状態管理（衝突・取りこぼし防止） ----
+let targetVibeState = false;  // スマホが求める状態 (true: 振動させたい, false: 止めたい)
+let currentVibeState = false; // M5Stickへの送信が完了している状態
+let isBleWriting = false;     // 現在BLE通信中かどうか
 
+// 状態をM5Stickと同期させる関数
+async function syncBleState() {
+  // 通信中、またはBLE未接続なら処理しない
+  if (isBleWriting || !bleChar || !bleDevice?.gatt?.connected) return;
+
+  // 目標状態と現在の機器状態がすでに一致していれば何もしない
+  if (targetVibeState === currentVibeState) return;
+
+  isBleWriting = true;
+  const nextState = targetVibeState;
+  const command = nextState ? 'VIBRATE' : 'STOP';
+
+  try {
+    await bleChar.writeValue(new TextEncoder().encode(command));
+    currentVibeState = nextState;
+    log(`>>> [BLE] ${command} 送信成功`);
+  } catch (e) {
+    log(`BLE送信エラー (${command}): ${e.message}`);
+  } finally {
+    isBleWriting = false;
+    // 送信処理中にユーザーが向きを変えて状態がズレた場合、最新の目標状態へ再同期
+    if (targetVibeState !== currentVibeState) {
+      syncBleState();
+    }
+  }
+}
+
+// update() から呼ばれる関数
+function handleHapticFeedback(aligned) {
+  targetVibeState = aligned; // 向きが合っていれば true、外れていれば false
+  syncBleState();
+}
   // ---- センサー開始 ----
   async function startSensors(){
     // 方位(コンパス)
