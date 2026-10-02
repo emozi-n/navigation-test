@@ -204,26 +204,24 @@
 <script>
 (() => {
   // ---- 状態 ----
-  let selfLat=null, selfLng=null, selfHeadingDeg=null;
-  let targetLat=null, targetLng=null;
-  let watchId=null;
-  let bleDevice=null, bleChar=null;
-  let bleServer = null;
-  let lastVibeTime=0;
+  let selfLat = null, selfLng = null, selfHeadingDeg = null;
+  let targetLat = null, targetLng = null;
+  let watchId = null;
+  let bleDevice = null, bleChar = null;
   let displayedDiff = null;
 
-// 方角を安定させるための履歴
-let headingHistory = [];
-const HEADING_SAMPLES = 10;
+  // BLE送信用の振動状態フラグ（重複送信を防ぐ）
+  let isVibratingState = false;
 
-// 方角が急に飛んだときの最大変化量
-const MAX_HEADING_STEP = 30; 
+  // 方角を安定させるための履歴
+  let headingHistory = [];
+  const HEADING_SAMPLES = 10;
 
-  //const BLE_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
-  //const BLE_CHAR_UUID    = '0000ffe1-0000-1000-8000-00805f9b34fb'; // ←実機のUUIDに置き換え
+  // 方角が急に飛んだときの最大変化量
+  const MAX_HEADING_STEP = 30; 
 
-  const BLE_SERVICE_UUID ='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-  const BLE_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  const BLE_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  const BLE_CHAR_UUID    = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
   
   // ---- DOM ----
   const statusDot = document.getElementById('statusDot');
@@ -241,115 +239,118 @@ const MAX_HEADING_STEP = 30;
   const bleLog = document.getElementById('bleLog');
 
   // ---- ゲージの目盛り描画 ----
-  for(let i=0;i<360;i+=10){
-    const t=document.createElement('div');
-    t.className='tick'+(i%90===0?' cardinal':'');
-    t.style.transform=`rotate(${i}deg)`;
+  for(let i=0; i<360; i+=10){
+    const t = document.createElement('div');
+    t.className = 'tick' + (i % 90 === 0 ? ' cardinal' : '');
+    t.style.transform = `rotate(${i}deg)`;
     tickWrap.appendChild(t);
   }
 
   function log(msg){
-    const d=document.createElement('div');
-    d.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;
+    const d = document.createElement('div');
+    d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
     bleLog.prepend(d);
   }
 
   function setStatus(on, text){
     statusDot.classList.toggle('on', on);
-    statusText.textContent=text;
+    statusText.textContent = text;
   }
 
   // ---- 地理計算 ----
-  function toRad(d){return d*Math.PI/180;}
-  function toDeg(r){return r*180/Math.PI;}
+  function toRad(d){ return d * Math.PI / 180; }
+  function toDeg(r){ return r * 180 / Math.PI; }
 
-  function bearingTo(lat1,lng1,lat2,lng2){
-    const φ1=toRad(lat1), φ2=toRad(lat2), Δλ=toRad(lng2-lng1);
-    const y=Math.sin(Δλ)*Math.cos(φ2);
-    const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
-    return (toDeg(Math.atan2(y,x))+360)%360;
+  function bearingTo(lat1, lng1, lat2, lng2){
+    const φ1 = toRad(lat1), φ2 = toRad(lat2), Δλ = toRad(lng2 - lng1);
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
   }
 
-  function distanceMeters(lat1,lng1,lat2,lng2){
-    const R=6371000;
-    const φ1=toRad(lat1), φ2=toRad(lat2);
-    const dφ=toRad(lat2-lat1), dλ=toRad(lng2-lng1);
-    const a=Math.sin(dφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
-    return 2*R*Math.asin(Math.sqrt(a));
+  function distanceMeters(lat1, lng1, lat2, lng2){
+    const R = 6371000;
+    const φ1 = toRad(lat1), φ2 = toRad(lat2);
+    const dφ = toRad(lat2 - lat1), dλ = toRad(lng2 - lng1);
+    const a = Math.sin(dφ / 2)**2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2)**2;
+    return 2 * R * Math.asin(Math.sqrt(a));
   }
 
-  function angleDiff(a,b){
-    let d=(b-a+540)%360-180; // -180 .. 180
+  function angleDiff(a, b){
+    let d = (b - a + 540) % 360 - 180; // -180 .. 180
     return d;
   }
 
   // ---- メイン更新ループ ----
   function update(){
-    if(selfLat==null || selfLng==null){ return; }
+    if(selfLat == null || selfLng == null){ return; }
     selfPosEl.textContent = `${selfLat.toFixed(6)}, ${selfLng.toFixed(6)}`;
 
-    if(targetLat==null || targetLng==null){
-      bearingEl.textContent='親機未設定';
-      distanceEl.textContent='--';
-      diffDegEl.textContent='--°';
+    if(targetLat == null || targetLng == null){
+      bearingEl.textContent = '親機未設定';
+      distanceEl.textContent = '--';
+      diffDegEl.textContent = '--°';
       return;
     }
 
-    const bearing = bearingTo(selfLat,selfLng,targetLat,targetLng);
-    const dist = distanceMeters(selfLat,selfLng,targetLat,targetLng);
-    bearingEl.textContent = bearing.toFixed(0)+'°';
-    distanceEl.textContent = dist<1000 ? dist.toFixed(0)+' m' : (dist/1000).toFixed(2)+' km';
+    const bearing = bearingTo(selfLat, selfLng, targetLat, targetLng);
+    const dist = distanceMeters(selfLat, selfLng, targetLat, targetLng);
+    bearingEl.textContent = bearing.toFixed(0) + '°';
+    distanceEl.textContent = dist < 1000 ? dist.toFixed(0) + ' m' : (dist / 1000).toFixed(2) + ' km';
 
-    if(selfHeadingDeg==null){
-      diffDegEl.textContent='方位不明';
+    if(selfHeadingDeg == null){
+      diffDegEl.textContent = '方位不明';
       return;
     }
-
 
     const diff = angleDiff(selfHeadingDeg, bearing); // -180..180
     
     if(displayedDiff === null){
       displayedDiff = diff;
-    }else{
+    } else {
       let delta = diff - (displayedDiff % 360);
-
-      if(delta > 180){
-        delta -= 360;
-      }
-
-      if(delta < -180){
-        delta += 360;
-      }
-
+      if(delta > 180) delta -= 360;
+      if(delta < -180) delta += 360;
       displayedDiff += delta;
     }
 
-    diffDegEl.textContent = (diff>0?'+':'')+diff.toFixed(0)+'°';
+    diffDegEl.textContent = (diff > 0 ? '+' : '') + diff.toFixed(0) + '°';
     needleWrap.style.transform = `rotate(${displayedDiff}deg)`;
     
     const threshold = Number(thresholdSlider.value);
     const aligned = Math.abs(diff) <= threshold;
     pullGlow.classList.toggle('active', aligned);
 
-    handleHapticFeedback(diff, aligned);
+    // 触覚フィードバック（BLE通知）を実行
+    handleHapticFeedback(aligned);
   }
 
-  // ---- 触覚フィードバック(振動) ----
-  // 実機では、この intensity / interval に相当する値を 03 のBLE送信で子機のアクチュエータへ渡す
-  function handleHapticFeedback(diff, aligned){
-    if(!('vibrate' in navigator)) return;
-    const now = performance.now();
-    if(!aligned){
-      return; // ロック外では振動しない
-    }
-    // ズレが小さいほど間隔を短く(=強く引かれる感覚)
-    const absDiff = Math.abs(diff);
-    const interval = 1000; // 1秒おきに正面か確認＋振動
-    if(now - lastVibeTime > interval){
-      if(bleChar && bleDevice?.gatt?.connected){
-        bleChar.writeValue(new TextEncoder().encode('VIBRATE'));
+  // ---- 触覚フィードバック (Bluetooth制御) ----
+  async function handleHapticFeedback(aligned){
+    // BLE非接続時や準備ができていない場合は何もしない
+    if(!bleChar || !bleDevice?.gatt?.connected) return;
+
+    // 1. 正面を向き、現在「振動OFF」状態の場合 -> VIBRATE 送信
+    if(aligned && !isVibratingState){
+      try {
+        isVibratingState = true; // 先にフラグを立てて連投を防ぐ
+        await bleChar.writeValue(new TextEncoder().encode('VIBRATE'));
+        log('>>> [BLE] VIBRATE 送信 (正面に到達)');
+      } catch(e) {
+        log('VIBRATE送信失敗: ' + e.message);
+        isVibratingState = false; // 失敗したらフラグを戻す
       }
-      lastVibeTime = now;
+    } 
+    // 2. 正面から外れ、現在「振動ON」状態の場合 -> STOP 送信
+    else if(!aligned && isVibratingState){
+      try {
+        isVibratingState = false; // 先にフラグを下ろす
+        await bleChar.writeValue(new TextEncoder().encode('STOP'));
+        log('>>> [BLE] STOP 送信 (正面から外れた)');
+      } catch(e) {
+        log('STOP送信失敗: ' + e.message);
+        isVibratingState = true; // 失敗したらフラグを戻す
+      }
     }
   }
 
@@ -357,122 +358,95 @@ const MAX_HEADING_STEP = 30;
   async function startSensors(){
     // 方位(コンパス)
     if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-      try{
+      try {
         const res = await DeviceOrientationEvent.requestPermission();
-        if(res !== 'granted'){ setStatus(false,'コンパスの許可が必要です'); return; }
-      }catch(e){ setStatus(false,'許可取得に失敗: '+e.message); return; }
+        if(res !== 'granted'){ setStatus(false, 'コンパスの許可が必要です'); return; }
+      } catch(e) { setStatus(false, '許可取得に失敗: ' + e.message); return; }
     }
 
     window.addEventListener('deviceorientationabsolute', onOrientation, true);
     window.addEventListener('deviceorientation', onOrientation, true);
 
     // 位置情報
-    if(!navigator.geolocation){ setStatus(false,'この端末は位置情報に対応していません'); return; }
-    if(watchId!=null) navigator.geolocation.clearWatch(watchId);
-    watchId = navigator.geolocation.watchPosition(pos=>{
+    if(!navigator.geolocation){ setStatus(false, 'この端末は位置情報に対応していません'); return; }
+    if(watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(pos => {
       selfLat = pos.coords.latitude;
       selfLng = pos.coords.longitude;
       setStatus(true, `GPS取得中 (精度 ±${pos.coords.accuracy.toFixed(0)}m)`);
       update();
-    }, err=>{
-      setStatus(false, '位置情報エラー: '+err.message);
-    }, { enableHighAccuracy:true, maximumAge:1000, timeout:15000 });
+    }, err => {
+      setStatus(false, '位置情報エラー: ' + err.message);
+    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
   }
 
-function onOrientation(e){
-  let heading = null;
+  function onOrientation(e){
+    let heading = null;
 
-  if(typeof e.webkitCompassHeading === 'number'){
-    heading = e.webkitCompassHeading; // iOS: 0=北, 時計回り
-  } else if(e.alpha != null){
-    // Android等
-    heading = (360 - e.alpha) % 360;
-  }
-
-  if(heading == null || !Number.isFinite(heading)) return;
-
-  // --------------------------------
-  // 急激な角度変化をチェック
-  // --------------------------------
-  if(selfHeadingDeg != null){
-
-    // 角度差を -180 ～ +180 にする
-    let step = heading - selfHeadingDeg;
-
-    if(step > 180){
-      step -= 360;
+    if(typeof e.webkitCompassHeading === 'number'){
+      heading = e.webkitCompassHeading; // iOS
+    } else if(e.alpha != null){
+      heading = (360 - e.alpha) % 360; // Android等
     }
 
-    if(step < -180){
-      step += 360;
+    if(heading == null || !Number.isFinite(heading)) return;
+
+    // 急激な角度変化チェック
+    if(selfHeadingDeg != null){
+      let step = heading - selfHeadingDeg;
+      if(step > 180) step -= 360;
+      if(step < -180) step += 360;
+      if(Math.abs(step) > MAX_HEADING_STEP){
+        return;
+      }
     }
 
-    // 一度に30°以上飛んだ場合は採用しない
-    if(Math.abs(step) > MAX_HEADING_STEP){
-      return;
+    // 平均化処理
+    const rad = heading * Math.PI / 180;
+    headingHistory.push({ sin: Math.sin(rad), cos: Math.cos(rad) });
+    if(headingHistory.length > HEADING_SAMPLES){
+      headingHistory.shift();
     }
+
+    let sinSum = 0, cosSum = 0;
+    for(const h of headingHistory){
+      sinSum += h.sin;
+      cosSum += h.cos;
+    }
+
+    let smoothedHeading = Math.atan2(sinSum, cosSum) * 180 / Math.PI;
+    if(smoothedHeading < 0) smoothedHeading += 360;
+
+    selfHeadingDeg = smoothedHeading;
+    selfHeadingEl.textContent = smoothedHeading.toFixed(0) + '°';
+
+    update();
   }
-
-  // --------------------------------
-  // 0°と360°の境目を考慮して平均する
-  // --------------------------------
-  const rad = heading * Math.PI / 180;
-
-  headingHistory.push({
-    sin: Math.sin(rad),
-    cos: Math.cos(rad)
-  });
-
-  // 最新10個だけ残す
-  if(headingHistory.length > HEADING_SAMPLES){
-    headingHistory.shift();
-  }
-
-  // 平均した方向を計算
-  let sinSum = 0;
-  let cosSum = 0;
-
-  for(const h of headingHistory){
-    sinSum += h.sin;
-    cosSum += h.cos;
-  }
-
-  let smoothedHeading =
-    Math.atan2(sinSum, cosSum) * 180 / Math.PI;
-
-  if(smoothedHeading < 0){
-    smoothedHeading += 360;
-  }
-
-  selfHeadingDeg = smoothedHeading;
-
-  selfHeadingEl.textContent =
-    smoothedHeading.toFixed(0) + '°';
-
-  update();
-}
 
   // ---- UIイベント ----
   document.getElementById('btnStart').addEventListener('click', startSensors);
 
   document.getElementById('btnVibeTest').addEventListener('click', ()=>{
-    if('vibrate' in navigator){ navigator.vibrate([80,60,80]); }
-    else alert('この端末/ブラウザは振動APIに対応していません');
+    if('vibrate' in navigator){
+      navigator.vibrate([80, 60, 80]);
+    } else {
+      alert('この端末/ブラウザはスマホ本体の振動APIに対応していません（M5Stickへの通信テストは「03」で行えます）');
+    }
   });
 
   document.getElementById('btnUseCurrentAsTarget').addEventListener('click', ()=>{
-    if(selfLat==null){ alert('先に 01 でセンサーを開始してください'); return; }
-    targetLat=selfLat; targetLng=selfLng;
-    document.getElementById('targetLat').value=selfLat.toFixed(6);
-    document.getElementById('targetLng').value=selfLng.toFixed(6);
+    if(selfLat == null){ alert('先に 01 でセンサーを開始してください'); return; }
+    targetLat = selfLat; targetLng = selfLng;
+    document.getElementById('targetLat').value = selfLat.toFixed(6);
+    document.getElementById('targetLng').value = selfLng.toFixed(6);
     update();
   });
 
   document.getElementById('btnSetTarget').addEventListener('click', ()=>{
-    const la=parseFloat(document.getElementById('targetLat').value);
-    const ln=parseFloat(document.getElementById('targetLng').value);
-    if(isNaN(la)||isNaN(ln)){ alert('緯度経度を入力してください'); return; }
-    targetLat=la; targetLng=ln;
+    const la = parseFloat(document.getElementById('targetLat').value);
+    const ln = parseFloat(document.getElementById('targetLng').value);
+    if(isNaN(la) || isNaN(ln)){ alert('緯度経度を入力してください'); return; }
+    targetLat = la; targetLng = ln;
     update();
   });
 
@@ -481,68 +455,51 @@ function onOrientation(e){
     update();
   });
 
-  // ---- Web Bluetooth(雛形) ----
+  // ---- Web Bluetooth (BLE) ----
   document.getElementById('btnBleConnect').addEventListener('click', async ()=>{
-    
-    if(!navigator.bluetooth){ log('この端末/ブラウザは Web Bluetooth 非対応です(iOS Safari非対応)'); return; }
-    try{
-     // bleDevice = await navigator.bluetooth.requestDevice({
-       // filters:[{ services:[BLE_SERVICE_UUID] }]
-        // 対象が絞れない場合は次の1行に差し替え: acceptAllDevices:true, optionalServices:[BLE_SERVICE_UUID]
-
+    if(!navigator.bluetooth){ log('この端末/ブラウザは Web Bluetooth 非対応です'); return; }
+    try {
       bleDevice = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [BLE_SERVICE_UUID]
-    });
+      });
       
-      log('デバイス選択: '+bleDevice.name);
-     log('GATT接続開始');
+      log('デバイス選択: ' + bleDevice.name);
+      log('GATT接続開始...');
+      
+      // 切断検出イベントを追加
+      bleDevice.addEventListener('gattserverdisconnected', () => {
+        log('BLE切断されました');
+        document.getElementById('btnBleSend').disabled = true;
+        isVibratingState = false;
+      });
+
       const server = await bleDevice.gatt.connect();
       log('GATT接続成功');
 
-      log('サービス取得開始');
       const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-      log('サービス取得成功');
-
-      log('キャラクタリスティック取得開始');
-      bleChar = await service.getCharacteristic(BLE_CHAR_UUID);
-      log('キャラクタリスティック取得成功');
-      log('接続完了。送信可能です。');
-      document.getElementById('btnBleSend').disabled=false;
-    }catch(e){
-      log('接続失敗: '+e.message);
+      const characteristic = await service.getCharacteristic(BLE_CHAR_UUID);
+      
+      bleChar = characteristic;
+      log('接続完了！自動制御を開始します。');
+      document.getElementById('btnBleSend').disabled = false;
+    } catch(e) {
+      log('接続失敗: ' + e.message);
     }
   });
 
   document.getElementById('btnBleSend').addEventListener('click', async ()=>{
     if(!bleChar){ return; }
-    if(targetLat==null || selfHeadingDeg==null){ log('送信できるデータがまだありません'); return; }
-    const bearing = bearingTo(selfLat,selfLng,targetLat,targetLng);
-    const diff = Math.round((angleDiff(selfHeadingDeg,bearing)+360)%360); // 0-359
-    const threshold = Number(thresholdSlider.value);
-    const aligned = Math.abs(angleDiff(selfHeadingDeg,bearing)) <= threshold;
-    const intensity = aligned ? Math.max(0, 255 - Math.abs(angleDiff(selfHeadingDeg,bearing))*10) : 0;
-
-    const payload = new TextEncoder().encode('VIBRATE');
-    try{
-      await bleChar.writeValue(payload);
-      log(`送信: diff=${diff}° intensity=${Math.round(intensity)}`);
-    }catch(e){
-      log('送信失敗: '+e.message);
+    try {
+      // 手動テストボタン（VIBRATEとSTOPを交互に送る）
+      const cmd = isVibratingState ? 'STOP' : 'VIBRATE';
+      await bleChar.writeValue(new TextEncoder().encode(cmd));
+      isVibratingState = !isVibratingState;
+      log(`手動送信: ${cmd}`);
+    } catch(e) {
+      log('手動送信失敗: ' + e.message);
     }
   });
-
-   document.getElementById('btnStart').addEventListener('click', startSensors);
-
-  document.getElementById('btnVibeTest').addEventListener('click', ()=>{
-    if('vibrate' in navigator){
-      navigator.vibrate([80,60,80]);
-    }else{
-      alert('この端末/ブラウザは振動APIに対応していません');
-    }
-  });
-
-  
 
 })();
 </script>
