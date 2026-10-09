@@ -384,63 +384,36 @@ const MAX_HEADING_STEP = 30;
   // ---- 触覚フィードバック(振動) ----
   // 実機では、この intensity / interval に相当する値を 03 のWebSocketで子機へ渡す
   function handleHapticFeedback(diff, aligned){
-    if(!wifiSocket || wifiSocket.readyState !== WebSocket.OPEN) return;
-    const now = performance.now();
-    if(!aligned){
-      vibrationSuppressed = false;
-      stopHapticFeedback();
-      return; // ロック外では振動しない
-    }
-    if(vibrationSuppressed) return;
-    // ズレが小さいほど間隔を短く(=強く引かれる感覚)
-    const interval = 1000; // 1秒おきに正面か確認＋振動
-    if(now - lastVibeTime > interval){
-      const intensity = Math.max(0, 255 - Math.abs(diff)*10);
-      if(sendWifiCommand({
-        type: 'VIBRATE',
-        diff: Math.round((diff+360)%360),
-        intensity: Math.round(intensity),
-        aligned: true
-      })){
-        vibrationActive = true;
-        lastVibeTime = now;
-      }
-    }
-  }
- /*
- function handleHapticFeedback(diff, aligned){
-
-  if(!wifiSocket || wifiSocket.readystate !== WebSocket.OPEN){
-    return;
-  }
-
-  // 正面の範囲に入った
-  if(aligned){
-
-    // すでに振動中なら、もう一度VIBRATEを送らない
-    if(vibrationActive){
+    if(!wifiSocket || wifiSocket.readyState !== WebSocket.OPEN){
       return;
     }
 
-    const intensity = Math.max(0, 255 - Math.abs(diff) * 10);
+    if(aligned){
+      if(vibrationActive){
+        return;
+      }
 
-    if(sendWifiCommand({
-      type: 'VIBRATE',
-      diff: Math.round((diff + 360) % 360),
-      intensity: Math.round(intensity),
-      aligned: true
-    })){
-      vibrationActive = true;
-      vibrationSuppressed = false;
+      const intensity = Math.max(0, 255 - Math.abs(diff) * 10);
+      const now = performance.now();
+      const interval = 1000;
+      if(now - lastVibeTime > interval){
+        if(sendWifiCommand({
+          type: 'VIBRATE',
+          diff: Math.round((diff + 360) % 360),
+          intensity: Math.round(intensity),
+          aligned: true
+        })){
+          vibrationActive = true;
+          vibrationSuppressed = false;
+          lastVibeTime = now;
+        }
+      }
+      return;
     }
-    return;
+
+    stopHapticFeedback();
   }
 
-  // 正面の範囲から外れた
-  stopHapticFeedback();
-
- }
- */
   // ---- センサー開始 ----
   async function startSensors(){
     // 方位(コンパス)
