@@ -84,6 +84,22 @@
   input[type=number], input[type=text]{
     width:100%;background:#0F1216;border:1px solid var(--panel-line);border-radius:7px;
     padding:9px 10px;color:var(--ink);font-family:'JetBrains Mono',monospace;font-size:13px;}
+  input[type=range]{
+    width:100%;accent-color:var(--lock);cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-runnable-track{
+    height:6px;border-radius:999px;background:rgba(255,176,32,.25);
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+    background:var(--lock);border:2px solid #1A1400;margin-top:-5px;box-shadow:0 0 0 2px rgba(255,176,32,.18);
+  }
+  input[type=range]::-moz-range-track{
+    height:6px;border-radius:999px;background:rgba(255,176,32,.25);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border:none;border-radius:50%;background:var(--lock);box-shadow:0 0 0 2px rgba(255,176,32,.18);
+  }
   input:focus{outline:1px solid var(--self);}
 
   button{font-family:'Barlow Condensed',sans-serif;font-weight:600;letter-spacing:.03em;
@@ -189,10 +205,11 @@
     <div class="btnRow">
       <button id="btnBleConnect">Bluetoothデバイスに接続</button>
       <button id="btnBleSend" disabled>ズレ角度/振動指令を送信</button>
+      <button id="btnBleStop" disabled>振動を停止</button>
     </div>
     <div class="logBox" id="bleLog"><div>未接続</div></div>
     <div class="hint">
-      サービス/キャラクタリスティックの UUID はファームウェア側に合わせて <code>BLE_SERVICE_UUID</code> / <code>BLE_CHAR_UUID</code>(スクリプト冒頭)を書き換えてください。現状はスタブとして、計算したズレ角度(0-359を2byteで) と 振動強度(0-255を1byte)を1バイトずつ書き込みます。GPS付き親機がある場合は、緯度経度をこの経路で受信し 02 の欄へ流し込む形に拡張できます。
+      サービス/キャラクタリスティックの UUID はファームウェア側に合わせて <code>BLE_SERVICE_UUID</code> / <code>BLE_CHAR_UUID</code>(スクリプト冒頭)を書き換えてください。現状はスタブとして、計算したズレ角度と振動強度を <code>VIBRATE</code> / <code>STOP</code> の文字列で送信します。GPS付き親機がある場合は、緯度経度をこの経路で受信し 02 の欄へ流し込む形に拡張できます。
     </div>
   </section>
 
@@ -235,6 +252,8 @@
   let bleDevice=null, bleChar=null;
   let bleServer = null;
   let lastVibeTime=0;
+  let vibrationActive=false;
+  let vibrationSuppressed=false;
 
 // 方角を安定させるための履歴
 let headingHistory = [];
@@ -278,6 +297,28 @@ const MAX_HEADING_STEP = 30;
     bleLog.prepend(d);
   }
 
+  function sendBleCommand(command){
+    if(!bleChar || !bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected){
+      log('Bluetooth接続がまだありません');
+      return false;
+    }
+    try{
+      const payload = new TextEncoder().encode(command);
+      bleChar.writeValue(payload);
+      log(`送信: ${command}`);
+      return true;
+    }catch(e){
+      log('送信失敗: '+e.message);
+      return false;
+    }
+  }
+
+  function stopHapticFeedback(){
+    if(vibrationActive && sendBleCommand('STOP')){
+      vibrationActive = false;
+    }
+  }
+
   function setStatus(on, text){
     statusDot.classList.toggle('on', on);
     statusText.textContent=text;
@@ -309,13 +350,17 @@ const MAX_HEADING_STEP = 30;
 
   // ---- メイン更新ループ ----
   function update(){
-    if(selfLat==null || selfLng==null){ return; }
+    if(selfLat==null || selfLng==null){
+      stopHapticFeedback();
+      return;
+    }
     selfPosEl.textContent = `${selfLat.toFixed(6)}, ${selfLng.toFixed(6)}`;
 
     if(targetLat==null || targetLng==null){
       bearingEl.textContent='目的地未設定';
       distanceEl.textContent='--';
       diffDegEl.textContent='--°';
+      stopHapticFeedback();
       return;
     }
 
@@ -326,6 +371,7 @@ const MAX_HEADING_STEP = 30;
 
     if(selfHeadingDeg==null){
       diffDegEl.textContent='方位不明';
+      stopHapticFeedback();
       return;
     }
 
@@ -343,19 +389,25 @@ const MAX_HEADING_STEP = 30;
   // ---- 触覚フィードバック(振動) ----
   // 実機では、この intensity / interval に相当する値を 03 のBLE送信で子機のアクチュエータへ渡す
   function handleHapticFeedback(diff, aligned){
-    if(!('vibrate' in navigator)) return;
-    const now = performance.now();
+    if(!bleChar || !bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected) return;
+
     if(!aligned){
-      return; // ロック外では振動しない
+      vibrationSuppressed = false;
+      stopHapticFeedback();
+      return;
     }
-    // ズレが小さいほど間隔を短く(=強く引かれる感覚)
-    const absDiff = Math.abs(diff);
-    const interval = 1000; // 1秒おきに正面か確認＋振動
+
+    if(vibrationActive) return;
+
+    const intensity = Math.max(0, 255 - Math.abs(diff) * 10);
+    const now = performance.now();
+    const interval = 1000;
     if(now - lastVibeTime > interval){
-      if(bleChar && bleDevice?.gatt?.connected){
-        bleChar.writeValue(new TextEncoder().encode('VIBRATE'));
+      if(sendBleCommand(`VIBRATE:${Math.round(intensity)}:${Math.round((diff + 360) % 360)}`)){
+        vibrationActive = true;
+        vibrationSuppressed = false;
+        lastVibeTime = now;
       }
-      lastVibeTime = now;
     }
   }
 
@@ -489,20 +541,22 @@ function onOrientation(e){
 
   // ---- Web Bluetooth(雛形) ----
   document.getElementById('btnBleConnect').addEventListener('click', async ()=>{
-    
     if(!navigator.bluetooth){ log('この端末/ブラウザは Web Bluetooth 非対応です(iOS Safari非対応)'); return; }
     try{
-     // bleDevice = await navigator.bluetooth.requestDevice({
-       // filters:[{ services:[BLE_SERVICE_UUID] }]
-        // 対象が絞れない場合は次の1行に差し替え: acceptAllDevices:true, optionalServices:[BLE_SERVICE_UUID]
-
       bleDevice = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [BLE_SERVICE_UUID]
-    });
-      
-      log('デバイス選択: '+bleDevice.name);
-     log('GATT接続開始');
+      });
+
+      bleDevice.addEventListener('gattserverdisconnected', ()=>{
+        log('Bluetooth接続を切断しました');
+        document.getElementById('btnBleSend').disabled = true;
+        document.getElementById('btnBleStop').disabled = true;
+        vibrationActive = false;
+      });
+
+      log('デバイス選択: '+(bleDevice.name || 'unknown'));
+      log('GATT接続開始');
       const server = await bleDevice.gatt.connect();
       log('GATT接続成功');
 
@@ -514,31 +568,50 @@ function onOrientation(e){
       bleChar = await service.getCharacteristic(BLE_CHAR_UUID);
       log('キャラクタリスティック取得成功');
       log('接続完了。送信可能です。');
-      document.getElementById('btnBleSend').disabled=false;
+      document.getElementById('btnBleSend').disabled = false;
+      document.getElementById('btnBleStop').disabled = false;
     }catch(e){
       log('接続失敗: '+e.message);
     }
   });
 
   document.getElementById('btnBleSend').addEventListener('click', async ()=>{
-    if(!bleChar){ return; }
-    if(targetLat==null || selfHeadingDeg==null){ log('送信できるデータがまだありません'); return; }
+    if(!bleChar || !bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected){
+      log('Bluetooth接続がまだありません');
+      return;
+    }
+    if(targetLat==null || selfHeadingDeg==null){
+      log('送信できるデータがまだありません');
+      return;
+    }
     const bearing = bearingTo(selfLat,selfLng,targetLat,targetLng);
-    const diff = Math.round((angleDiff(selfHeadingDeg,bearing)+360)%360); // 0-359
+    const diff = Math.round((angleDiff(selfHeadingDeg,bearing)+360)%360);
     const threshold = Number(thresholdSlider.value);
     const aligned = Math.abs(angleDiff(selfHeadingDeg,bearing)) <= threshold;
     const intensity = aligned ? Math.max(0, 255 - Math.abs(angleDiff(selfHeadingDeg,bearing))*10) : 0;
 
-    const payload = new TextEncoder().encode('VIBRATE');
     try{
-      await bleChar.writeValue(payload);
+      await bleChar.writeValue(new TextEncoder().encode(`VIBRATE:${Math.round(intensity)}:${diff}`));
+      vibrationActive = aligned && intensity > 0;
+      vibrationSuppressed = false;
       log(`送信: diff=${diff}° intensity=${Math.round(intensity)}`);
     }catch(e){
       log('送信失敗: '+e.message);
     }
   });
 
-   document.getElementById('btnStart').addEventListener('click', startSensors);
+  document.getElementById('btnBleStop').addEventListener('click', async ()=>{
+    if(!bleChar || !bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected){
+      log('Bluetooth接続がまだありません');
+      return;
+    }
+    if(sendBleCommand('STOP')){
+      vibrationActive = false;
+      vibrationSuppressed = true;
+    }
+  });
+
+  document.getElementById('btnStart').addEventListener('click', startSensors);
 
   document.getElementById('btnVibeTest').addEventListener('click', ()=>{
     if('vibrate' in navigator){
@@ -547,8 +620,6 @@ function onOrientation(e){
       alert('この端末/ブラウザは振動APIに対応していません');
     }
   });
-
-  
 
 })();
 </script>
